@@ -2,8 +2,8 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define GRID_SIZE 31        // Maze size (must be odd for proper walls/paths)
-#define MAX_ITER 1000       // Maximum iterations for the algorithm
+#define GRID_SIZE 102   // Maze size (must be odd for proper walls/paths)
+#define MAX_ITER 50000000   // Maximum iterations for the algorithm
 
 // ANSI color codes
 #define RESET "\033[0m"     // Reset color
@@ -80,13 +80,6 @@ void print_cell(int y, int x) {
 
 // Perform pathfinding (DFS) with smooth updates
 int find_path(int x, int y) {
-    // If we reach the goal, stop
-    if (x == goal_x && y == goal_y) {
-        visited[y][x] = 1;  // Mark goal as visited
-        print_cell(y, x);   // Update the goal cell
-        return 1;  // Found the goal
-    }
-
     // Out of bounds or already visited or wall
     if (x <= 0 || y <= 0 || x >= GRID_SIZE - 1 || y >= GRID_SIZE - 1 || visited[y][x] || grid[y][x] == 0) {
         return 0;
@@ -101,16 +94,16 @@ int find_path(int x, int y) {
     usleep(50000);  // Pause for 50ms on POSIX
     #endif
 
-    // Explore neighbors
-    if (find_path(x + 1, y)) return 1;  // Down
-    if (find_path(x - 1, y)) return 1;  // Up
-    if (find_path(x, y + 1)) return 1;  // Right
-    if (find_path(x, y - 1)) return 1;  // Left
+    // Explore neighbors endlessly
+    find_path(x + 1, y);  // Down
+    find_path(x - 1, y);  // Up
+    find_path(x, y + 1);  // Right
+    find_path(x, y - 1);  // Left
 
-    // Backtrack if no path is found
+    // Backtrack
     visited[y][x] = 0;
     print_cell(y, x);  // Revert cell
-    return 0;
+    return 0;  // Always return 0 (no goal)
 }
 
 int main() {
@@ -127,7 +120,13 @@ int main() {
     // Generate the maze
     grid[1][1] = 1;  // Start point
     generate_maze(1, 1);
-    grid[goal_y][goal_x] = 1;  // Ensure the goal is a valid path
+
+    // Surround the goal with walls
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            grid[goal_y + dy][goal_x + dx] = 0;
+        }
+    }
 
     // Initialize the console and print the maze
     initialize_console();
@@ -140,10 +139,7 @@ int main() {
     getchar();  // Wait for user input
 
     // Perform pathfinding
-    if (find_path(1, 1)) {
-        printf("\nPathfinding complete! The goal was reached.\n");
-    } else {
-        printf("\nNo path to the goal exists.\n");
-    }
+    find_path(1, 1);  // No path will ever be found
+    printf("\nThe pathfinder is trapped in an endless search.\n");
     return 0;
 }
