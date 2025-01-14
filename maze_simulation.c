@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define GRID_SIZE 31        // Maze size (must be odd for proper walls/paths)
+#define GRID_SIZE 350       // Maze size (must be odd for proper walls/paths)
 #define MAX_ITER 1000       // Maximum iterations for the algorithm
 
 // ANSI color codes
