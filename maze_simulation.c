@@ -2,12 +2,16 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h> // For multithreading
 
-#define GRID_SIZE 50            // Size of the simulation grid
-#define FIRE_THRESHOLD 3        // Minimum input to trigger firing
-#define REFRACTORY_PERIOD 5     // Steps a neuron remains inactive after firing
-#define RANDOM_FIRE_CHANCE 2    // Chance for spontaneous firing (percent)
-#define MAX_ITERATIONS 500      // Maximum simulation steps
+#define GRID_SIZE 200            // Size of the simulation grid
+#define REGION_SIZE 5            // Size of each region
+#define NUM_REGIONS (GRID_SIZE / REGION_SIZE)
+#define FIRE_THRESHOLD 3         // Minimum input to trigger firing
+#define REFRACTORY_PERIOD 5      // Steps a neuron remains inactive after firing
+#define RANDOM_FIRE_CHANCE 2     // Chance for spontaneous firing (percent)
+#define MAX_ITERATIONS 500       // Maximum simulation steps
+#define NUM_THREADS 4            // Number of threads for parallel processing
 
 // Neuron states
 #define STATE_INACTIVE 0
@@ -28,6 +32,9 @@ typedef struct {
 
 Neuron grid[GRID_SIZE][GRID_SIZE];          // Current grid
 Neuron previous_grid[GRID_SIZE][GRID_SIZE]; // Previous grid for change tracking
+
+int active_regions[NUM_REGIONS][NUM_REGIONS]; // Tracks active regions
+pthread_mutex_t region_mutexes[NUM_REGIONS][NUM_REGIONS]; // Mutexes for each region
 
 // Utility to clear the console and set the cursor to the top-left
 void initialize_console() {
@@ -51,6 +58,9 @@ void initialize_grid() {
         int x = rand() % GRID_SIZE;
         int y = rand() % GRID_SIZE;
         grid[y][x].state = STATE_FIRING;
+        int region_x = x / REGION_SIZE;
+        int region_y = y / REGION_SIZE;
+        active_regions[region_y][region_x] = 1; // Mark the region as active
     }
 }
 
@@ -63,63 +73,74 @@ void spread_activation(int x, int y) {
             int ny = y + dy;
             if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
                 grid[ny][nx].activation_energy++;
+                int region_x = nx / REGION_SIZE;
+                int region_y = ny / REGION_SIZE;
+                active_regions[region_y][region_x] = 1; // Mark the region as active
             }
         }
     }
 }
 
-// Update the grid state for the next step
-void update_grid() {
-    Neuron temp_grid[GRID_SIZE][GRID_SIZE];
+// Update a single region
+void update_region(int region_x, int region_y) {
+    int x_start = region_x * REGION_SIZE;
+    int y_start = region_y * REGION_SIZE;
+    int x_end = x_start + REGION_SIZE;
+    int y_end = y_start + REGION_SIZE;
 
-    // Copy the current grid to a temporary grid
-    for (int i = 0; i < GRID_SIZE; i++) {
-        for (int j = 0; j < GRID_SIZE; j++) {
-            temp_grid[i][j] = grid[i][j];
-        }
-    }
+    pthread_mutex_lock(&region_mutexes[region_y][region_x]);
 
-    for (int i = 0; i < GRID_SIZE; i++) {
-        for (int j = 0; j < GRID_SIZE; j++) {
+    int active = 0; // Tracks if the region remains active
+    for (int i = y_start; i < y_end; i++) {
+        for (int j = x_start; j < x_end; j++) {
             Neuron *current = &grid[i][j];
             if (current->state == STATE_FIRING) {
                 // Neuron fires and enters refractory state
-                temp_grid[i][j].state = STATE_REFRACTORY;
-                temp_grid[i][j].refractory_counter = REFRACTORY_PERIOD;
-
-                // Spread activation to neighbors
+                current->state = STATE_REFRACTORY;
+                current->refractory_counter = REFRACTORY_PERIOD;
                 spread_activation(j, i);
+                active = 1;
             } else if (current->state == STATE_REFRACTORY) {
                 // Decrease refractory counter
-                temp_grid[i][j].refractory_counter--;
-                if (temp_grid[i][j].refractory_counter <= 0) {
-                    temp_grid[i][j].state = STATE_INACTIVE; // Return to inactive
+                current->refractory_counter--;
+                if (current->refractory_counter <= 0) {
+                    current->state = STATE_INACTIVE; // Return to inactive
                 }
             } else if (current->state == STATE_INACTIVE) {
                 // Check if neuron should fire
                 if (current->activation_energy >= FIRE_THRESHOLD || rand() % 100 < RANDOM_FIRE_CHANCE) {
-                    temp_grid[i][j].state = STATE_FIRING;
+                    current->state = STATE_FIRING;
+                    active = 1;
                 }
-                temp_grid[i][j].activation_energy = 0; // Reset activation energy
+                current->activation_energy = 0; // Reset activation energy
             }
         }
     }
 
-    // Copy temp grid back to main grid
-    for (int i = 0; i < GRID_SIZE; i++) {
-        for (int j = 0; j < GRID_SIZE; j++) {
-            grid[i][j] = temp_grid[i][j];
-        }
-    }
+    active_regions[region_y][region_x] = active; // Update activity status
+    pthread_mutex_unlock(&region_mutexes[region_y][region_x]);
 }
 
-// Display the grid, updating only changed neurons
+// Thread function to update regions
+void *update_regions_thread(void *arg) {
+    int thread_id = *(int *)arg;
+
+    for (int i = thread_id; i < NUM_REGIONS; i += NUM_THREADS) {
+        for (int j = 0; j < NUM_REGIONS; j++) {
+            if (active_regions[i][j]) { // Only update active regions
+                update_region(j, i);
+            }
+        }
+    }
+    return NULL;
+}
+
+// Display the grid
 void display_grid() {
     for (int i = 0; i < GRID_SIZE; i++) {
         for (int j = 0; j < GRID_SIZE; j++) {
-            // Update only if the state has changed
             if (grid[i][j].state != previous_grid[i][j].state) {
-                CURSOR_MOVE(i + 1, j * 2 + 1); // Move to the correct position
+                CURSOR_MOVE(i + 1, j * 2 + 1);
                 if (grid[i][j].state == STATE_FIRING) {
                     printf(COLOR_FIRING);
                 } else if (grid[i][j].state == STATE_REFRACTORY) {
@@ -127,12 +148,11 @@ void display_grid() {
                 } else {
                     printf(COLOR_INACTIVE);
                 }
+                previous_grid[i][j] = grid[i][j]; // Update the previous state
             }
-            // Update the previous grid to match the current state
-            previous_grid[i][j] = grid[i][j];
         }
     }
-    fflush(stdout); // Ensure all output is displayed
+    fflush(stdout);
 }
 
 int main() {
@@ -142,11 +162,31 @@ int main() {
     initialize_console();
     initialize_grid();
 
+    // Initialize mutexes
+    for (int i = 0; i < NUM_REGIONS; i++) {
+        for (int j = 0; j < NUM_REGIONS; j++) {
+            pthread_mutex_init(&region_mutexes[i][j], NULL);
+        }
+    }
+
+    pthread_t threads[NUM_THREADS];
+    int thread_ids[NUM_THREADS];
+
     // Run the simulation
     for (int step = 0; step < MAX_ITERATIONS; step++) {
-        display_grid();       // Update the display
-        update_grid();        // Update the simulation state
-        usleep(100000);       // Pause for visualization (adjust for speed)
+        // Create threads to update regions
+        for (int t = 0; t < NUM_THREADS; t++) {
+            thread_ids[t] = t;
+            pthread_create(&threads[t], NULL, update_regions_thread, &thread_ids[t]);
+        }
+
+        // Wait for all threads to complete
+        for (int t = 0; t < NUM_THREADS; t++) {
+            pthread_join(threads[t], NULL);
+        }
+
+        display_grid(); // Display the grid
+        usleep(100000); // Pause for visualization
     }
 
     printf("\nSimulation complete.\n");
